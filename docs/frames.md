@@ -134,14 +134,16 @@ out, made smaller where a thick section leaves less room for a radius;
 | `round_tube` | `diameter`, `wall` | |
 | `angle` | `width` (leg along x), `height` (leg along y), `thickness` | `root_radius` (thickness), `toe_radius` (thickness / 2); together at most the shorter leg's inside length |
 | `channel` | `height`, `width` (flange length), `web`, `flange` (thicknesses) | `root_radius` (web, at most the room in a flange and half the web's inside height), `toe_radius` (0), `flange_slope` (0: parallel flanges) |
-| `i_beam` | `height`, `width`, `web`, `flange` | `root_radius` (web, at most the room in a flange and half the web's inside height) |
+| `i_beam` | `height`, `width`, `web`, `flange` | `root_radius` (web, at most the room in a half flange and half the web's inside height), `toe_radius` (0), `flange_slope` (0: parallel flanges) |
 
 The profile's bounding box is centred on its origin, x across and y up. Angles have their heel at
 the bottom left; channels open towards +x.
 
 `flange_slope` is an angle (a number of degrees, at most 20) that tapers a channel's flanges,
 thicker at the web, as on taper flange channels: `flange` is then the thickness at the middle of a
-flange's inside length, between the web and the toe, as their tables give it.
+flange's inside length, between the web and the toe, as their tables give it. An I beam takes it too,
+as on taper flange beams, but its `flange` is the thickness a quarter of the width in from a
+flange's edge, where DIN 1025-1 gives IPN flanges.
 
 ## Standard steel sizes
 

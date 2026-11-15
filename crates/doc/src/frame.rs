@@ -99,8 +99,11 @@ pub enum Profile {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         flange_slope: Option<f64>,
     },
-    /// An I or H beam with parallel flanges. The root radius defaults to the web thickness (less
-    /// where the flanges or the web leave less room).
+    /// An I or H beam. The root radius defaults to the web thickness (less where the flanges or
+    /// the web leave less room), the toe radius to none. The flanges are parallel unless
+    /// `flange_slope` (degrees, default 0) tapers their inner faces, thicker at the web, as on
+    /// taper flange beams: then `flange` is the thickness a quarter of the width in from a
+    /// flange's edge, where tables of taper flange beams (DIN 1025-1's IPN) give it.
     IBeam {
         height: f64,
         width: f64,
@@ -108,6 +111,10 @@ pub enum Profile {
         flange: f64,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         root_radius: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        toe_radius: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        flange_slope: Option<f64>,
     },
 }
 
@@ -167,8 +174,8 @@ pub fn profile_kinds() -> Vec<ProfileKind> {
             kind: "i_beam",
             label: "I-Beam",
             required: &["height", "width", "web", "flange"],
-            optional: &["root_radius"],
-            example: Profile::IBeam { height: 100.0, width: 50.0, web: 4.5, flange: 7.0, root_radius: None },
+            optional: &["root_radius", "toe_radius", "flange_slope"],
+            example: Profile::IBeam { height: 100.0, width: 50.0, web: 4.5, flange: 7.0, root_radius: None, toe_radius: None, flange_slope: None },
         },
     ]
 }
@@ -529,9 +536,14 @@ impl Profile {
                 let r1 = root_radius.unwrap_or_else(|| web.min(room(width - web - r2)).min(room(height - 2.0 * at_web) / 2.0));
                 Profile::Channel { height, width, web, flange, root_radius: Some(r1), toe_radius: Some(r2), flange_slope: Some(slope) }
             }
-            Profile::IBeam { height, width, web, flange, root_radius } => {
-                let r = root_radius.unwrap_or_else(|| web.min(room(width - web) / 2.0).min(room(height - 2.0 * flange) / 2.0));
-                Profile::IBeam { height, width, web, flange, root_radius: Some(r) }
+            Profile::IBeam { height, width, web, flange, root_radius, toe_radius, flange_slope } => {
+                let r2 = toe_radius.unwrap_or(0.0);
+                let slope = flange_slope.unwrap_or(0.0);
+                let (_, at_web) = beam_flange_ends(width, web, flange, slope);
+                // The root shares a half flange's inside length with the toe, and the web's
+                // inside height with the other root.
+                let r1 = root_radius.unwrap_or_else(|| web.min(room((width - web) / 2.0 - r2)).min(room(height - 2.0 * at_web) / 2.0));
+                Profile::IBeam { height, width, web, flange, root_radius: Some(r1), toe_radius: Some(r2), flange_slope: Some(slope) }
             }
             Profile::RoundBar { .. } | Profile::RoundTube { .. } => self.clone(),
         }
@@ -651,21 +663,54 @@ impl Profile {
                 let radii = [0.0, 0.0, r2, r1, r1, r2, 0.0, 0.0];
                 Ok(Region2 { outer: rounded_polygon(&shifted(&pts, b, h), &radii)?, holes: Vec::new() })
             }
-            Profile::IBeam { height, width, web, flange, root_radius } => {
+            Profile::IBeam { height, width, web, flange, root_radius, toe_radius, flange_slope } => {
                 let (h, b, tw, tf) = (dim("height", height)?, dim("width", width)?, dim("web", web)?, dim("flange", flange)?);
                 less("web", tw, "width", b)?;
-                less_half("flange", tf, "the height", h)?;
+                let slope = flange_slope.unwrap_or(0.0);
+                if !(slope.is_finite() && (0.0..=MAX_FLANGE_SLOPE).contains(&slope)) {
+                    return Err(invalid(format!("profile `flange_slope` must be between 0 and {MAX_FLANGE_SLOPE} degrees (got {slope})")));
+                }
+                // Each half flange's thickness at its toe and at the web: `tf` both, without a slope.
+                let inside = (b - tw) / 2.0;
+                let (at_toe, at_web) = beam_flange_ends(b, tw, tf, slope);
+                if slope == 0.0 {
+                    less_half("flange", tf, "the height", h)?;
+                } else {
+                    if at_toe < MIN_PROFILE_DIMENSION {
+                        return Err(invalid(format!(
+                            "profile `flange_slope` ({slope}°) leaves a flange {at_toe:.4} mm thick at its toe; it must be at least {MIN_PROFILE_DIMENSION} mm"
+                        )));
+                    }
+                    if 2.0 * at_web >= h {
+                        return Err(invalid(format!(
+                            "profile flanges at the web ({at_web:.4} mm thick) must be less than half the height ({})",
+                            h / 2.0
+                        )));
+                    }
+                }
                 let r = radius("root_radius", root_radius.unwrap_or(0.0))?;
-                at_most("`root_radius`", r, (b - tw) / 2.0, "the inside length of a flange")?;
-                at_most("`root_radius`", r, (h - 2.0 * tf) / 2.0, "half the web's inside height")?;
-                let (x, y, w, f) = (b / 2.0, h / 2.0, tw / 2.0, h / 2.0 - tf);
-                let pts = [(-x, -y), (x, -y), (x, -f), (w, -f), (w, f), (x, f), (x, y), (-x, y), (-x, f), (-w, f), (-w, -f), (-x, -f)];
-                let radii = [0.0, 0.0, 0.0, r, r, 0.0, 0.0, 0.0, 0.0, r, r, 0.0];
+                let r2 = radius("toe_radius", toe_radius.unwrap_or(0.0))?;
+                at_most("`toe_radius`", r2, at_toe, "the flange thickness at the toe")?;
+                at_most("`root_radius` + `toe_radius`", r + r2, inside, "the inside length of a flange")?;
+                at_most("`root_radius`", r, (h - 2.0 * at_web) / 2.0, "half the web's inside height")?;
+                let (x, y, w) = (b / 2.0, h / 2.0, tw / 2.0);
+                let (t, f) = (y - at_toe, y - at_web);
+                let pts = [(-x, -y), (x, -y), (x, -t), (w, -f), (w, f), (x, t), (x, y), (-x, y), (-x, t), (-w, f), (-w, -f), (-x, -t)];
+                let radii = [0.0, 0.0, r2, r, r, r2, 0.0, 0.0, r2, r, r, r2];
                 let pts: Vec<Vec2> = pts.iter().map(|&(x, y)| Vec2::new(x, y)).collect();
                 Ok(Region2 { outer: rounded_polygon(&pts, &radii)?, holes: Vec::new() })
             }
         }
     }
+}
+
+/// A taper flange beam's flange thickness at its toe and at the web: `thickness` is the
+/// thickness a quarter of the width `b` in from the flange's edge (DIN 1025-1 gives IPN flanges
+/// there), and the inner face slopes `slope` degrees across the half flange's inside length to
+/// the web `web` thick. `thickness` both without a slope.
+fn beam_flange_ends(b: f64, web: f64, thickness: f64, slope: f64) -> (f64, f64) {
+    let s = slope.to_radians().tan();
+    (thickness - b / 4.0 * s, thickness + ((b - web) / 2.0 - b / 4.0) * s)
 }
 
 /// Points given with the heel at the origin, moved so a `w` × `h` bounding box is centred on it.

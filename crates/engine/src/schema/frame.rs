@@ -113,7 +113,7 @@ impl JsonSchema for ProfileParam {
     }
     fn json_schema(_: &mut SchemaGenerator) -> Schema {
         json_schema!({
-            "description": "A built-in profile: {\"kind\": bar | round_bar | rect_tube | round_tube | angle | channel | i_beam, …its dimensions}. Each dimension is a number in the design's units or a length expression over its parameters (\"tube_wall\", \"2 in\"); a channel's `flange_slope` is an angle, a number of degrees or an angle expression. `frame.profile.list` gives each kind's dimensions and an example. A dimension that is left out and isn't required takes a default worked out from the profile's size. Or a standard steel size by name, {\"size\": \"RSC 203x89\"}, alone: it brings its own dimensions (`frame.profile.list` lists the sizes).",
+            "description": "A built-in profile: {\"kind\": bar | round_bar | rect_tube | round_tube | angle | channel | i_beam, …its dimensions}. Each dimension is a number in the design's units or a length expression over its parameters (\"tube_wall\", \"2 in\"); a channel's or an I beam's `flange_slope` is an angle, a number of degrees or an angle expression. `frame.profile.list` gives each kind's dimensions and an example. A dimension that is left out and isn't required takes a default worked out from the profile's size. Or a standard steel size by name, {\"size\": \"RSC 203x89\"}, alone: it brings its own dimensions (`frame.profile.list` lists the sizes).",
             "anyOf": profile_kinds_schema(&dimension_schema()).into_iter().chain([size_schema()]).collect::<Vec<_>>()
         })
     }

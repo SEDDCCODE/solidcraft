@@ -473,7 +473,9 @@ fn end_cap_outlines_inset_and_chamfer_exactly() {
     let rooted = Profile::Angle { width: 40.0, height: 40.0, thickness: 4.0, root_radius: Some(3.0), toe_radius: Some(0.0) }.region().unwrap();
     close(inset(&rooted.outer, 1.0).unwrap().signed_area(), 148.0 + 16.0 - 4.0 * std::f64::consts::PI, "rooted angle inset");
     // A 100 x 50 I-beam (web 4.5, flanges 7) in by 1: flanges 48 x 5, a web 2.5 x 88.
-    let beam = Profile::IBeam { height: 100.0, width: 50.0, web: 4.5, flange: 7.0, root_radius: Some(0.0) }.region().unwrap();
+    let beam = Profile::IBeam { height: 100.0, width: 50.0, web: 4.5, flange: 7.0, root_radius: Some(0.0), toe_radius: None, flange_slope: None }
+        .region()
+        .unwrap();
     close(inset(&beam.outer, 1.0).unwrap().signed_area(), 2.0 * 48.0 * 5.0 + 2.5 * 88.0, "beam inset");
     assert!(inset(&beam.outer, 2.3).is_err());
     let channel =
@@ -504,7 +506,10 @@ fn end_caps_close_open_sections_with_the_outside_of_the_profile() {
             Profile::Channel { height: 100.0, width: 50.0, web: 6.0, flange: 8.0, root_radius: Some(5.0), toe_radius: Some(2.0), flange_slope: None },
             100.0 * 50.0,
         ),
-        (Profile::IBeam { height: 100.0, width: 50.0, web: 4.5, flange: 7.0, root_radius: Some(4.5) }, 100.0 * 50.0),
+        (
+            Profile::IBeam { height: 100.0, width: 50.0, web: 4.5, flange: 7.0, root_radius: Some(4.5), toe_radius: None, flange_slope: None },
+            100.0 * 50.0,
+        ),
     ];
     for (p, area) in open {
         close(cap_outline(&p.region().unwrap().outer).signed_area(), area, "open section");
@@ -608,6 +613,87 @@ fn flange_slopes_that_do_not_fit_are_refused() {
     }
     // Leaving the root radius out fits it inside the sloped flanges.
     assert!(channel(serde_json::json!({"height": 40, "flange_slope": 8})).region().is_ok());
+}
+
+#[test]
+fn a_taper_flange_i_beam_keeps_its_area_and_thickens_at_the_web() {
+    // Sharp corners: each half flange is `tf` thick b / 4 in from its edge and its inside face
+    // slopes at s = tan(slope) over the inside length L = (b − tw) / 2, so it is `tf − b s / 4`
+    // at the toe, `tf + (L − b / 4) s` at the web and `tf − tw s / 4` on average.
+    let (h, b, tw, tf, slope) = (200.0, 90.0, 7.5, 11.3, 0.14_f64.atan().to_degrees());
+    let beam = |slope: Option<f64>| {
+        let mut j = serde_json::json!({"kind": "i_beam", "height": h, "width": b, "web": tw, "flange": tf, "root_radius": 0});
+        if let Some(s) = slope {
+            j["flange_slope"] = serde_json::json!(s);
+        }
+        profile(j)
+    };
+    let t = slope.to_radians().tan();
+    let s = sec(&beam(Some(slope)));
+    close(s.area, b * h - (b - tw) * (h - 2.0 * (tf - tw * t / 4.0)), "area");
+    close(s.centroid[0], 0.0, "centroid x");
+    close(s.centroid[1], 0.0, "centroid y");
+    close(s.width, b, "width");
+    close(s.height, h, "height");
+    let (toe, web) = (tf - b / 4.0 * t, tf + ((b - tw) / 2.0 - b / 4.0) * t);
+    let region = beam(Some(slope)).region().unwrap();
+    let corners: Vec<Vec2> = region.outer.segs.iter().map(|g| g.start()).collect();
+    for want in [
+        Vec2::new(b / 2.0, -h / 2.0 + toe),
+        Vec2::new(tw / 2.0, -h / 2.0 + web),
+        Vec2::new(-tw / 2.0, h / 2.0 - web),
+        Vec2::new(-b / 2.0, h / 2.0 - toe),
+    ] {
+        assert!(corners.iter().any(|p| p.dist(want) < 1e-9), "a corner at {want:?} in {corners:?}");
+    }
+    // No slope is the parallel flange beam, as before the slope existed.
+    assert_eq!(section(&beam(None).region().unwrap()), section(&beam(Some(0.0)).region().unwrap()));
+}
+
+#[test]
+fn a_taper_flange_i_beam_takes_toe_and_root_radii() {
+    // DIN 1025-1's IPN 200: 200 × 90, web 7.5, flange 11.3 (b / 4 in from the edge), r1 7.5,
+    // r2 4.5, 14 % slope; the table gives 33.4 cm² (rounded to 0.1 cm²).
+    let p = profile(serde_json::json!({
+        "kind": "i_beam", "height": 200, "width": 90, "web": 7.5, "flange": 11.3,
+        "root_radius": 7.5, "toe_radius": 4.5, "flange_slope": 0.14_f64.atan().to_degrees()
+    }));
+    let s = sec(&p);
+    assert!((s.area - 3340.0).abs() <= 5.0, "IPN 200 area {} mm²", s.area);
+    let region = p.region().unwrap();
+    assert_eq!(region.outer.segs.iter().filter(|s| matches!(s, Seg2::Arc { .. })).count(), 8, "four roots and four toes");
+    // Leaving the radii out: no toe radius, a root radius that fits inside the sloped flanges.
+    let r = profile(serde_json::json!({"kind": "i_beam", "height": 40, "width": 90, "web": 7.5, "flange": 11.3, "flange_slope": 8}));
+    assert!(r.region().is_ok());
+    let Profile::IBeam { root_radius: Some(r1), toe_radius: Some(r2), flange_slope: Some(sl), .. } = r.filled() else { panic!("an I beam: {r:?}") };
+    close(r2, 0.0, "toe radius");
+    close(sl, 8.0, "slope");
+    assert!(r1 > 0.0 && r1 <= 7.5, "root radius {r1}");
+}
+
+#[test]
+fn i_beam_flange_slopes_that_do_not_fit_are_refused() {
+    let beam = |extra: serde_json::Value| {
+        let mut j = serde_json::json!({"kind": "i_beam", "height": 200, "width": 90, "web": 8, "flange": 12});
+        for (k, v) in extra.as_object().into_iter().flatten() {
+            j[k] = v.clone();
+        }
+        profile(j)
+    };
+    for (extra, why) in [
+        (serde_json::json!({"flange_slope": 25}), "flange_slope"),
+        (serde_json::json!({"flange_slope": -1}), "flange_slope"),
+        (serde_json::json!({"flange_slope": f64::MAX}), "flange_slope"),
+        // 20.5 mm of half flange each side of its middle at 20° takes 7.5 mm off a 2 mm flange.
+        (serde_json::json!({"flange": 2, "flange_slope": 20}), "at its toe"),
+        // 12 + 1.8 mm at the web is more than half of 27.
+        (serde_json::json!({"height": 27, "flange_slope": 5}), "flanges at the web"),
+        (serde_json::json!({"flange_slope": 5, "toe_radius": 11}), "toe_radius"),
+        (serde_json::json!({"root_radius": 30, "toe_radius": 12}), "root_radius"),
+    ] {
+        let err = beam(extra.clone()).region().unwrap_err().to_string();
+        assert!(err.contains(why), "{extra}: {err}");
+    }
 }
 
 #[test]

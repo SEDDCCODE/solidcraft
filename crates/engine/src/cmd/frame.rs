@@ -38,7 +38,7 @@ const INSERT_CONTRACT: TypedContract<ProfileInsertParams> = TypedContract::new()
 /// The profile parameter, as every frame command documents it.
 macro_rules! profile_doc {
     () => {
-        "profile: {kind: bar|round_bar|rect_tube|round_tube|angle|channel|i_beam, …its dimensions: each a number in the design's units or a length expression over its parameters (\"tube_wall\", \"2 in\"); a channel's flange_slope is an angle (a number of degrees)} (frame.profile.list gives each kind's dimensions and an example; dimensions left out take defaults from the profile's size) | {size: a standard steel size by name, such as \"RSC 203x89\", \"PFC 200x90x30\", \"RSA 50x50x5\", \"SHS 100x100x5\", \"RHS 200x100x6.3\" or \"CHS 42.4x3.2\" (frame.profile.list lists them), alone: it brings its dimensions}"
+        "profile: {kind: bar|round_bar|rect_tube|round_tube|angle|channel|i_beam, …its dimensions: each a number in the design's units or a length expression over its parameters (\"tube_wall\", \"2 in\"); a channel's or an I beam's flange_slope is an angle (a number of degrees)} (frame.profile.list gives each kind's dimensions and an example; dimensions left out take defaults from the profile's size) | {size: a standard steel size by name, such as \"RSC 203x89\", \"PFC 200x90x30\", \"RSA 50x50x5\", \"SHS 100x100x5\", \"RHS 200x100x6.3\" or \"CHS 42.4x3.2\" (frame.profile.list lists them), alone: it brings its dimensions}"
     };
 }
 
